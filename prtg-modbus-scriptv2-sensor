@@ -1,0 +1,115 @@
+from pymodbus.client import ModbusTcpClient
+from pymodbus.transaction import ModbusSocketFramer
+import struct
+import json
+import time
+
+# Configuration for registers: (register_number, scale, offset, conversionfactor(celcius to farenheit etc.) , channel_id, name, unit)
+REGISTER_CONFIG = [
+    (102, 0.0078125, 0, 1, 10, "Frequency Output", "Hz"),
+    (198, 0.0078125, -251, 1, 20, "Fuel Level", "%"),
+    (200, .125, 0, .14503774, 30, "Oil Pressure", "PSI"),
+    (201, 0.03125, -273, 1, 40, "Coolant Temperature", "deg C"),
+    (202, 0.05, 0, 1, 50, "Battery Voltage", "V"),
+]
+
+def create_custom_query(transaction_id, unit_id, function_code, register_number, count):
+    address = register_number - 1  # Adjust for Modbus addressing , display was always 1 off, so I devalued by 1 here
+    mbap_header = struct.pack('>HHHB', transaction_id, 0, 6, unit_id)
+    pdu = struct.pack('>BHH', function_code, address, count)
+    return mbap_header + pdu
+
+def decode_response(response):
+    if len(response) < 9:
+        return "Invalid response length"
+    
+    # Unpack the header
+    header = struct.unpack('>HHHBB', response[:8])
+    
+    # The byte count is the 6th byte (index 5)
+    byte_count = response[8]
+    
+    if byte_count % 2 != 0:
+        return "Invalid byte count"
+    
+    # Unpack the data portion
+    values = struct.unpack(f'>{byte_count//2}H', response[9:9+byte_count])
+    
+    return values
+
+def apply_scaling_and_offset(value, scale, offset, conversionfactor):
+    return (value * scale + offset) * conversionfactor
+
+def main():
+    host = '10.1.1.1'
+    port = 502  # Adjust if your server uses a different port
+    client = ModbusTcpClient(host, port=port, framer=ModbusSocketFramer)
+    
+    try:
+        connection = client.connect()
+        if connection:
+            # Initialize an empty list to store all channels
+            channels = []
+            
+            for register_number, scale, offset, conversionfactor, channel_id, name, kind in REGISTER_CONFIG:
+                query = create_custom_query(
+                    transaction_id=11,  # 0x0B
+                    unit_id=1,
+                    function_code=3,
+                    register_number=register_number,
+                    count=1
+                )
+                # Send the query and receive the raw response
+                client.send(query)
+                response = client.recv(1024)
+                
+                if response:
+                    decoded_values = decode_response(response)
+                    if isinstance(decoded_values, tuple) and len(decoded_values) > 0:
+                        raw_value = decoded_values[0]
+                        scaled_value = apply_scaling_and_offset(raw_value, scale, offset, conversionfactor)
+                        
+                        # Create a channel object matching your format
+                        channel = {
+                            "id": channel_id,
+                            "name": name,
+                            "type": "float",
+                            "value": round(scaled_value, 2)
+                        }
+                        
+                        # Add to channels list
+                        channels.append(channel)
+                    else:
+                        print(f"Decoding error for register {register_number}: {decoded_values}")
+                else:
+                    print(f"No response received for register {register_number}")
+            
+            # Get system information for the message
+            import platform
+            uname = platform.uname().node  # Gets the hostname
+            
+            # Output the data in the exact format you provided
+            print(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "status": "ok",
+                        "channels": channels,
+                        "message": f"{uname}"
+                    }
+                )
+            )
+            
+    except Exception as e:
+        print(json.dumps(
+            {
+                "version": 2,
+                "status": "exception",
+                "message": str(e)
+            }
+        ))
+    finally:
+        client.close()
+
+if __name__ == "__main__":
+    main()
