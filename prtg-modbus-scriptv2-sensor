@@ -4,7 +4,7 @@ import struct
 import json
 import time
 
-# Configuration for registers: (register_number, scale, offset, conversionfactor(celcius to farenheit etc.) , channel_id, name, unit)
+# Configuration for registers: (register_number, scale, offset, conversionfactor(celcius to farenheit etc.) , channel_id, name, unit). Registers change per manufacturer. This is for a Caterpillar ECMP4 Mobdus Controller
 REGISTER_CONFIG = [
     (102, 0.0078125, 0, 1, 10, "Frequency Output", "Hz"),
     (198, 0.0078125, -251, 1, 20, "Fuel Level", "%"),
